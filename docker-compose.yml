@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------------
+#  online-script - single container stack (Portainer friendly)
+#
+#  Portainer:  Stacks -> Add stack -> paste / point at this repo,
+#              set the variables in the "Environment variables" box.
+#  CLI:        docker compose up -d --build
+# ---------------------------------------------------------------------
+services:
+  online-script:
+    build:
+      context: .
+      args:
+        APP_VERSION: ${APP_VERSION:-1.0.0}
+    image: ${IMAGE:-online-script:latest}
+    container_name: online-script
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    environment:
+      # optional shared secret; when set every request needs ?t=<token>
+      AUTH_TOKEN: ${AUTH_TOKEN:-}
+      # set when behind a reverse proxy so the scripts print the right URL
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      APP_VERSION: ${APP_VERSION:-1.0.0}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TZ: ${TZ:-UTC}
+    # scripts are baked into the image; mount them to edit without rebuilding
+    # volumes:
+    #   - ./scripts:/app/scripts:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
