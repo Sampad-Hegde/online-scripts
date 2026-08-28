@@ -8,24 +8,52 @@
 #    make prod-up       build + run with docker compose (Portainer host)
 # =====================================================================
 
-IMAGE        ?= online-script
+# ---------------------------------------------------------------------
+#  configuration
+#
+#  precedence:  make command line  >  shell environment  >  $(ENV_FILE)  >
+#               the defaults below.  The same .env is handed to compose and
+#               to the dev container, so one file drives everything.
+#  keep .env simple: KEY=value, no quotes, no $ substitution.
+# ---------------------------------------------------------------------
+ENV_FILE     ?= .env
+-include $(ENV_FILE)
+
+IMAGE_NAME   ?= online-script
 TAG          ?= latest
+REGISTRY     ?=
+# IMAGE is the full reference and means exactly what ${IMAGE} means in
+# docker-compose.yml, so setting it in .env just works
+IMAGE        ?= $(if $(REGISTRY),$(REGISTRY)/,)$(IMAGE_NAME):$(TAG)
 APP_VERSION  ?= 1.0.0
 HOST_PORT    ?= 8080
 CONTAINER    ?= online-script-dev
-REGISTRY     ?=
 
 DEV_ENGINE   ?= podman
 PROD_ENGINE  ?= docker
 
 BASE_URL     ?= http://localhost:$(HOST_PORT)
+# query string that authenticates smoke tests when AUTH_TOKEN is set
+TQ           ?= $(if $(AUTH_TOKEN),?t=$(AUTH_TOKEN),)
 RENDER_DIR   ?= build/rendered
 SHELL_IMAGE  ?= docker.io/library/debian:stable-slim
 PY           ?= $(shell command -v python3.13 || command -v python3.12 || \
                   command -v python3.11 || command -v python3.10 || command -v python3)
 VENV         ?= .venv
 
-FULL_IMAGE   := $(if $(REGISTRY),$(REGISTRY)/,)$(IMAGE):$(TAG)
+# an inline "# comment" in .env would otherwise leave trailing blanks
+IMAGE        := $(strip $(IMAGE))
+TAG          := $(strip $(TAG))
+HOST_PORT    := $(strip $(HOST_PORT))
+APP_VERSION  := $(strip $(APP_VERSION))
+
+# compose finds .env on its own, but be explicit so ENV_FILE=.env.prod works
+ENV_ARG      := $(if $(wildcard $(ENV_FILE)),--env-file $(ENV_FILE),)
+# a variable given on the make command line is exported by make itself, so it
+# still overrides .env inside compose; only IMAGE has to be recomposed here
+cmdline       = $(filter command,$(firstword $(origin $(1))))
+IMAGE_ARG    := $(if $(call cmdline,IMAGE)$(call cmdline,IMAGE_NAME)$(call cmdline,TAG)$(call cmdline,REGISTRY),IMAGE=$(IMAGE),)
+
 SCRIPTS      := $(wildcard scripts/*.sh)
 # SC2086 word splitting is intentional for $SUDO / package lists
 # SC2012 ls|wc is fine for counting sysfs entries
@@ -42,7 +70,7 @@ PROD_COMPOSE := $(shell if $(PROD_ENGINE) compose version >/dev/null 2>&1; \
                   then echo "$(PROD_ENGINE) compose"; else echo "docker-compose"; fi)
 
 .DEFAULT_GOAL := help
-.PHONY: help dev build run stop restart logs shell ps clean smoke test test-py \
+.PHONY: help env dev build run stop restart logs shell ps clean smoke test test-py \
         test-sh test-lib test-hw lint serve venv prod-build prod-up prod-down \
         prod-logs prod-restart prod-ps push save render render-all run-scripts \
         dev-compose-up dev-compose-down
@@ -52,25 +80,38 @@ help: ## show this help
 	@printf '\nonline-script  -  make targets\n\n'
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | sort | awk 'BEGIN{FS=":.*?## "} {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
-	@printf '\nvariables: IMAGE=%s TAG=%s HOST_PORT=%s DEV_ENGINE=%s PROD_ENGINE=%s\n\n' \
-	  '$(IMAGE)' '$(TAG)' '$(HOST_PORT)' '$(DEV_ENGINE)' '$(PROD_ENGINE)'
+	@printf '\nrun "make env" to see the effective settings\n\n'
+
+env: ## show the effective configuration (defaults + $(ENV_FILE) + command line)
+	@printf '\n  %-14s %s\n' 'ENV_FILE' \
+	  '$(ENV_FILE)$(if $(wildcard $(ENV_FILE)), (loaded), (not present - using defaults))'
+	@printf '  %-14s %s\n' 'IMAGE'        '$(IMAGE)'
+	@printf '  %-14s %s\n' 'APP_VERSION'  '$(APP_VERSION)'
+	@printf '  %-14s %s\n' 'HOST_PORT'    '$(HOST_PORT)'
+	@printf '  %-14s %s\n' 'LOG_LEVEL'    '$(if $(LOG_LEVEL),$(LOG_LEVEL),INFO (default))'
+	@printf '  %-14s %s\n' 'AUTH_TOKEN'   '$(if $(AUTH_TOKEN),set - every request needs ?t=...,empty - service is open)'
+	@printf '  %-14s %s\n' 'PUBLIC_BASE_URL' '$(if $(PUBLIC_BASE_URL),$(PUBLIC_BASE_URL),unset - taken from the request)'
+	@printf '  %-14s %s\n' 'DEV_ENGINE'   '$(DEV_ENGINE) ($(DEV_COMPOSE))'
+	@printf '  %-14s %s\n' 'PROD_ENGINE'  '$(PROD_ENGINE) ($(PROD_COMPOSE))'
+	@printf '\n  compose will be called as:  %s\n\n' '$(IMAGE_ARG) $(PROD_COMPOSE) $(ENV_ARG) up -d --build'
 
 ## ------------------------------------------------------------ dev (podman)
 dev: build run smoke ## build, run and smoke test with podman
 
 build: ## build the image with podman
 	$(DEV_ENGINE) build $(if $(filter podman,$(DEV_ENGINE)),--format docker,) \
-	  --build-arg APP_VERSION=$(APP_VERSION) -t $(IMAGE):$(TAG) .
+	  --build-arg APP_VERSION=$(APP_VERSION) -t $(IMAGE) .
 
 run: ## run the container with podman on $(HOST_PORT)
 	-$(DEV_ENGINE) rm -f $(CONTAINER) >/dev/null 2>&1
 	$(DEV_ENGINE) run -d --name $(CONTAINER) \
 	  -p $(HOST_PORT):8080 \
+	  $(ENV_ARG) \
 	  -e APP_VERSION=$(APP_VERSION) \
 	  -e LOG_LEVEL=$(if $(LOG_LEVEL),$(LOG_LEVEL),INFO) \
 	  $(if $(AUTH_TOKEN),-e AUTH_TOKEN=$(AUTH_TOKEN),) \
 	  -v ./scripts:/app/scripts:ro,z \
-	  $(IMAGE):$(TAG)
+	  $(IMAGE)
 	@printf '\nrunning at %s   (scripts mounted live from ./scripts)\n' '$(BASE_URL)'
 	@printf 'try:  curl -fsSL %s/ \n\n' '$(BASE_URL)'
 
@@ -89,10 +130,10 @@ ps: ## show the dev container
 	$(DEV_ENGINE) ps --filter name=$(CONTAINER)
 
 dev-compose-up: ## run the compose stack with podman instead of plain run
-	$(DEV_COMPOSE) up -d --build
+	$(IMAGE_ARG) $(DEV_COMPOSE) $(ENV_ARG) up -d --build
 
 dev-compose-down: ## stop the podman compose stack
-	$(DEV_COMPOSE) down
+	$(DEV_COMPOSE) $(ENV_ARG) down
 
 ## ----------------------------------------------------------------- checks
 smoke: ## curl every endpoint of the running service
@@ -181,32 +222,32 @@ serve: venv ## run uvicorn on the host with autoreload (no container)
 
 ## ----------------------------------------------------------- prod (docker)
 prod-build: ## build the production image with docker
-	$(PROD_ENGINE) build --build-arg APP_VERSION=$(APP_VERSION) -t $(FULL_IMAGE) .
+	$(PROD_ENGINE) build --build-arg APP_VERSION=$(APP_VERSION) -t $(IMAGE) .
 
 prod-up: ## deploy the compose stack with docker
-	APP_VERSION=$(APP_VERSION) IMAGE=$(FULL_IMAGE) HOST_PORT=$(HOST_PORT) \
-	  $(PROD_COMPOSE) up -d --build
-	@printf '\ndeployed. check:  curl -fsSL http://<server>:%s/\n\n' '$(HOST_PORT)'
+	$(IMAGE_ARG) $(PROD_COMPOSE) $(ENV_ARG) up -d --build
+	@printf '\ndeployed on port %s. check:  curl -fsSL http://<server>:%s/\n\n' \
+	  '$(HOST_PORT)' '$(HOST_PORT)'
 
 prod-down: ## stop the compose stack
-	$(PROD_COMPOSE) down
+	$(PROD_COMPOSE) $(ENV_ARG) down
 
 prod-restart: ## recreate the stack
-	$(PROD_COMPOSE) up -d --force-recreate --build
+	$(IMAGE_ARG) $(PROD_COMPOSE) $(ENV_ARG) up -d --force-recreate --build
 
 prod-logs: ## follow stack logs
-	$(PROD_COMPOSE) logs -f --tail=100
+	$(PROD_COMPOSE) $(ENV_ARG) logs -f --tail=100
 
 prod-ps: ## stack status
-	$(PROD_COMPOSE) ps
+	$(PROD_COMPOSE) $(ENV_ARG) ps
 
 push: prod-build ## push the image to $(REGISTRY)
 	@test -n "$(REGISTRY)" || { echo 'set REGISTRY=registry.example.com/you'; exit 1; }
-	$(PROD_ENGINE) push $(FULL_IMAGE)
+	$(PROD_ENGINE) push $(IMAGE)
 
 save: build ## export the podman image as a tarball for an offline server
-	$(DEV_ENGINE) save -o $(IMAGE)-$(TAG).tar $(IMAGE):$(TAG)
-	@echo "wrote $(IMAGE)-$(TAG).tar  ->  docker load -i $(IMAGE)-$(TAG).tar"
+	$(DEV_ENGINE) save -o $(IMAGE_NAME)-$(TAG).tar $(IMAGE)
+	@echo "wrote $(IMAGE_NAME)-$(TAG).tar  ->  docker load -i $(IMAGE_NAME)-$(TAG).tar"
 
 clean: stop ## remove venv, caches, rendered scripts and image tarballs
 	rm -rf $(VENV) .pytest_cache app/__pycache__ tests/__pycache__ build *.tar

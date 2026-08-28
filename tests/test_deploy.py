@@ -16,6 +16,13 @@ MAKEFILE = (ROOT / "Makefile").read_text()
 SERVICE = COMPOSE["services"]["online-script"]
 
 
+def recipe(target: str) -> str:
+    """The command lines of one make target."""
+    m = re.search(rf"^{re.escape(target)}:[^\n]*\n((?:\t[^\n]*\n)+)", MAKEFILE, re.M)
+    assert m, f"{target} recipe not found"
+    return m.group(1)
+
+
 def test_compose_service_is_hardened_and_restarts():
     assert SERVICE["restart"] == "unless-stopped"
     assert SERVICE["read_only"] is True
@@ -60,3 +67,41 @@ def test_makefile_keeps_podman_for_dev_and_docker_for_prod():
     assert re.search(r"^PROD_ENGINE\s+\?= docker", MAKEFILE, re.M)
     for target in ("dev:", "prod-up:", "test:", "smoke:", "render-all:"):
         assert re.search(rf"^{re.escape(target)}", MAKEFILE, re.M), f"missing {target}"
+
+
+# --------------------------------------------------------------- .env wiring
+def test_makefile_loads_the_env_file():
+    assert re.search(r"^ENV_FILE\s+\?= \.env", MAKEFILE, re.M)
+    assert re.search(r"^-include \$\(ENV_FILE\)", MAKEFILE, re.M)
+
+
+def test_prod_targets_do_not_shadow_the_env_file():
+    """Forcing VAR=... in front of compose beats .env - that was the bug."""
+    for target in ("prod-up", "prod-restart", "prod-down", "prod-logs", "dev-compose-up"):
+        body = recipe(target)
+        for var in ("HOST_PORT=", "APP_VERSION=", "LOG_LEVEL=", "AUTH_TOKEN="):
+            assert var not in body, f"{target} forces {var}, which overrides .env"
+
+
+def test_compose_calls_pass_the_env_file():
+    for target in ("prod-up", "prod-down", "prod-logs", "prod-ps"):
+        assert "$(ENV_ARG)" in recipe(target), f"{target} does not pass $(ENV_ARG)"
+
+
+def test_dev_container_gets_the_env_file_too():
+    body = recipe("run")
+    assert "$(ENV_ARG)" in body
+    assert "-p $(HOST_PORT):8080" in body
+
+
+def test_image_variable_matches_compose_semantics():
+    """IMAGE must be a full reference, like ${IMAGE} in docker-compose.yml."""
+    assert re.search(r"^IMAGE\s+\?= \$\(if \$\(REGISTRY\)", MAKEFILE, re.M)
+    assert "FULL_IMAGE" not in MAKEFILE, "stale variable"
+    assert "$(IMAGE):$(TAG)" not in MAKEFILE, "IMAGE already carries the tag"
+
+
+def test_env_example_matches_the_makefile_knobs():
+    documented = set(re.findall(r"^#?\s*([A-Z_]+)=", ENV_EXAMPLE, re.M))
+    for key in ("HOST_PORT", "IMAGE", "APP_VERSION", "AUTH_TOKEN", "LOG_LEVEL"):
+        assert key in documented, f"{key} should be in .env.example"

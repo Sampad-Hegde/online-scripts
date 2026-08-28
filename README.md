@@ -127,10 +127,25 @@ Portainer → *Stacks* → *Add stack* → point it at this repository (or paste
 *Environment variables* box and deploy. Or from a shell on the server:
 
 ```sh
+cp .env.example .env  # edit: port, token, public URL
+make env              # show the effective settings before deploying
 make prod-up          # docker compose up -d --build
 make prod-logs
 make prod-down
 ```
+
+`.env` drives everything — the compose stack, the dev container (`make run`)
+and the make variables themselves. Precedence is
+**command line > shell environment > `.env` > defaults**:
+
+```sh
+make prod-up                     # port/token/image from .env
+make prod-up HOST_PORT=9000      # this one wins over .env
+make prod-up ENV_FILE=.env.prod  # a different file
+```
+
+Keep `.env` plain (`KEY=value`, no quotes, no `$` substitution): it is read by
+make, by compose and by `--env-file` on the container engine.
 
 The compose service is a single container: read-only root filesystem, all
 capabilities dropped, `no-new-privileges`, unprivileged user, log rotation and
