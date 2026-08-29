@@ -19,7 +19,8 @@ carrying USB sticks full of tools.
 | `sysinfo.sh`   | system/BIOS/Secure Boot/TPM, CPU (cores, threads, base + turbo clock, cache, features), memory modules per slot (size, type, configured vs rated speed, manufacturer, part number), motherboard + chipset, SATA ports used/free, M.2 and PCIe slots (free or occupied), block devices, network adapters (driver, link, negotiated + maximum speed), GPUs, display outputs, **PCIe link width/gen vs capability**, all temperature and fan sensors |
 | `storage.sh`   | per drive: model, serial, firmware, capacity, SMART overall health, **lifespan left**, power-on hours, power cycles, data written/read, reallocated + pending sectors, temperature, sequential read speed, and a verdict |
 | `cpu-load.sh`  | loads every thread, samples temperature / clock / package power every second, reports **min, max, average and median**, idle baseline, heat soak, throttle events, an ASCII timeline and a cooling verdict |
-| `gpu-load.sh`  | same idea for the GPU: temperature, hotspot, utilisation, clock, power, PCIe link under load |
+| `gpu-load.sh`  | same idea for any GPU (AMD / Intel / nouveau): temperature, hotspot, utilisation, clock, power, PCIe link under load |
+| `nvidia-gpu.sh` | **NVIDIA only, much deeper**: identity + VBIOS, the card's own temperature thresholds, **throttle-reason accounting** (power cap vs HW thermal vs power brake vs SW thermal, as a share of samples), fan ramp, memory clock, VRAM used, **ECC / retired pages / remapped rows**, **XID errors before and during the run**, PCIe link, and a verdict judged against the VBIOS limits |
 | `all.sh`       | `sysinfo` + `storage` back to back (`LOAD=1` adds the load tests) |
 
 Each script is one self-contained POSIX `sh` file: the server splices a shared
@@ -48,6 +49,9 @@ curl -fsSL http://server:8080/storage.sh | sudo sh
 # 10 minute CPU burn-in with thermals
 curl -fsSL http://server:8080/cpu-load.sh | sudo DURATION=600 sh
 
+# NVIDIA card: 10 minute stress with throttle-reason accounting
+curl -fsSL http://server:8080/nvidia-gpu.sh | sudo DURATION=600 sh
+
 # same, as a URL you can hand to someone else
 curl -fsSL 'http://server:8080/cpu-load.sh?duration=600&threads=8' | sudo sh
 
@@ -68,6 +72,8 @@ as URL query parameters (`?duration=600`). The environment wins over the URL.
 | -------- | ------- | ------ |
 | `DURATION` | `60` | seconds of load (`cpu-load`, `gpu-load`) |
 | `THREADS` | all threads | cpu-load workers |
+| `INSTANCES` | `2` | parallel GPU load processes (`nvidia-gpu`) |
+| `LOAD_CMD` | unset | your own GPU burn command, e.g. `LOAD_CMD='gpu_burn 600'` (env only, never from the URL) |
 | `INTERVAL` | `1` | seconds between samples |
 | `BASELINE` | `8` | seconds of idle measurement before loading |
 | `GPU` | `0` | which GPU index to test |
@@ -179,12 +185,14 @@ scripts/_lib.sh        tables, statistics, sparklines, sensors, package install
 scripts/sysinfo.sh     hardware inventory
 scripts/storage.sh     SMART health and wear
 scripts/cpu-load.sh    CPU load + thermal test
-scripts/gpu-load.sh    GPU load + thermal test
+scripts/gpu-load.sh    GPU load + thermal test (any vendor)
+scripts/nvidia-gpu.sh  NVIDIA stress test: throttle reasons, ECC, XID
 scripts/all.sh         chains the above
 tests/test_api.py      API, assembly, auth, traversal, parameter safety
 tests/test_deploy.py   Dockerfile / compose / Makefile guards
 tests/lib_selftest.sh  library self test (tables, stats, parsers, fake sysfs)
 tests/fake_hw_run.sh   load tests run against a simulated overheating machine
+tests/fake-nvidia-smi  fake nvidia-smi so nvidia-gpu.sh can be tested with no card
 ```
 
 ### Adding a script
@@ -237,3 +245,13 @@ curl -fsSL 'http://server:8080/sysinfo.sh?cols=200' | sudo sh
 - A GPU load generator needs a working GL/Vulkan/OpenCL stack. On a bare
   console `glmark2-drm` or `stress-ng --gpu` work; otherwise the script says so
   and runs monitor-only while you load the GPU yourself.
+- `nvidia-gpu.sh` needs the **proprietary driver** — an Ubuntu live session
+  boots `nouveau`, which has no `nvidia-smi`. The script detects that and tells
+  you how to fix it; until then `gpu-load.sh` reads what nouveau exposes. If you
+  will be testing NVIDIA cards, boot the live USB with third-party drivers
+  enabled.
+- The heaviest NVIDIA load is `gpu-burn` (CUDA), which is not packaged anywhere.
+  If you have it built on your USB, point the script at it with
+  `LOAD_CMD='gpu_burn 600'`; otherwise it falls back to OpenCL (`clpeak`) and
+  then to graphics loads, and tells you what share of the power limit it reached
+  so you know how conclusive the thermal result is.

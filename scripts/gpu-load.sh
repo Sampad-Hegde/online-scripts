@@ -2,7 +2,7 @@
 # shellcheck shell=sh disable=SC2086,SC2012,SC3043
 #@name        gpu-load
 #@title       GPU load + thermal test
-#@description Loads the GPU, samples temperature / utilisation / clock / power, min-max-avg-median
+#@description Any GPU (AMD / Intel / nouveau): load, temperature, utilisation, clock, power, min-max-avg-median
 #@root        recommended
 #@params      duration,interval,baseline,gpu
 #@include _lib.sh
@@ -129,6 +129,10 @@ HAS_NVSMI=0
 [ "$G_VEN" = "nvidia" ] && have nvidia-smi && HAS_NVSMI=1
 if [ "$G_VEN" = "nvidia" ] && [ "$HAS_NVSMI" = "0" ]; then
     warn "nvidia-smi not found - install the NVIDIA driver for temp/util/power on this card"
+fi
+if [ "$G_VEN" = "nvidia" ] && [ "$HAS_NVSMI" = "1" ]; then
+    note "this card has the NVIDIA driver: nvidia-gpu.sh reports throttle reasons,"
+    note "ECC / retired pages and XID faults as well - $(os_url /nvidia-gpu.sh)"
 fi
 # iGPU: fall back to the CPU package sensor
 if [ -z "$G_TEMP" ] && [ "$HAS_NVSMI" = "0" ]; then

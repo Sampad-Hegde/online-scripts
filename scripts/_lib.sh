@@ -553,7 +553,9 @@ ensure_cmd() {
 
 # ====================================================================
 #  PCI helpers  (lspci -mm is machine readable; sysfs is the fallback)
+#  OS_SYSFS lets the test suite point every sysfs read at a fake tree.
 # ====================================================================
+OS_SYSFS=${OS_SYSFS:-/sys}
 os_lspci_cache() {
     [ -f "$OS_TMP/lspci" ] && return 0
     if ensure_cmd lspci; then
@@ -577,7 +579,8 @@ pci_name() {
     os_lspci_cache
     _n=$(awk -F'"' -v b="$_b" 'index($0, b) == 1 { print $4 " " $6; exit }' "$OS_TMP/lspci" | pci_clean)
     if [ -z "$_n" ] || [ "$_n" = " " ]; then
-        _v=$(rd "/sys/bus/pci/devices/$1/vendor"); _d=$(rd "/sys/bus/pci/devices/$1/device")
+        _v=$(rd "$OS_SYSFS/bus/pci/devices/$1/vendor")
+        _d=$(rd "$OS_SYSFS/bus/pci/devices/$1/device")
         _n="${_v#0x}:${_d#0x}"
     fi
     printf '%s' "$_n"
@@ -632,9 +635,7 @@ pcie_gen() {
 
 # ====================================================================
 #  temperature / frequency / power sensors
-#  OS_SYSFS exists so the test suite can point these at a fake tree.
 # ====================================================================
-OS_SYSFS=${OS_SYSFS:-/sys}
 CPU_TEMP_PATH=''
 CPU_TEMP_LABEL=''
 

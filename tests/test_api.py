@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
-EXPECTED = {"sysinfo", "storage", "cpu-load", "gpu-load", "all"}
+EXPECTED = {"sysinfo", "storage", "cpu-load", "gpu-load", "nvidia-gpu", "all"}
 
 
 @pytest.fixture

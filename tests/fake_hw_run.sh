@@ -9,9 +9,9 @@ DUR=${DUR:-10}
 BASE=${BASE:-3}
 FAILED=0
 F=$(mktemp -d)
-trap 'rm -rf "$F"; kill $SIM 2>/dev/null' EXIT
+trap 'rm -rf "$F"; kill $SIM $NVSIM 2>/dev/null' EXIT
 
-for f in "$S/cpu-load.sh" "$S/gpu-load.sh"; do
+for f in "$S/cpu-load.sh" "$S/gpu-load.sh" "$S/nvidia-gpu.sh"; do
     [ -r "$f" ] || { echo "missing $f - run 'python -m app.render' first"; exit 2; }
 done
 
@@ -144,9 +144,92 @@ want "flags the narrow PCIe link"  'linked at x8 of x16' "$F/gpu.out"
 want "notes monitor-only mode"     'monitor only'   "$F/gpu.out"
 wantnot "no unexpanded placeholder" '@@[A-Z_]+@@'   "$F/gpu.out"
 
+# ======================================================================
+#  nvidia-gpu.sh against a fake nvidia-smi
+# ======================================================================
+echo "== nvidia-gpu.sh against a card that thermally throttles"
+HERE=$(dirname "$0")
+if [ ! -x "$HERE/fake-nvidia-smi" ]; then
+    echo "  SKIP  $HERE/fake-nvidia-smi not found"
+else
+    mkdir -p "$F/bin"
+    cp "$HERE/fake-nvidia-smi" "$F/bin/nvidia-smi"
+    chmod +x "$F/bin/nvidia-smi"
+
+    NV="$F/bus/pci/devices/0000:03:00.0"
+    mkdir -p "$NV" "$F/driver/nvidia"
+    echo 0x10de   > "$NV/vendor"
+    echo 0x030000 > "$NV/class"
+    echo 0x2484   > "$NV/device"
+    ln -sfn "$F/driver/nvidia" "$NV/driver"
+
+    NVSTATE="$F/nv.state"
+    echo 'temp=38 util=0 fan=31 ps=P8' > "$NVSTATE"
+    # idle for the baseline, then hot and thermally throttled for the load run
+    ( sleep $((BASE + 3))
+      echo 'temp=91 util=98 sm=1350 mclk=7000 pwr=198.4 fan=99 ps=P0 mem=3288 pcap=1 hwsd=1 hwth=1 genc=4 widc=8' \
+          > "$NVSTATE" ) &
+    NVSIM=$!
+
+    PATH="$F/bin:$PATH" OS_SYSFS="$F" FAKE_NV_STATE="$NVSTATE" \
+        NO_INSTALL=1 NO_COLOR=1 PLAIN=1 COLS=110 DURATION="$DUR" BASELINE="$BASE" \
+        sh "$S/nvidia-gpu.sh" > "$F/nv.out" 2> "$F/nv.err"
+    rc=$?
+    kill $NVSIM 2>/dev/null
+
+    [ "$rc" = "0" ] && printf '  ok    nvidia-gpu exit code 0\n' || {
+        printf '  FAIL  nvidia-gpu exit code %s\n' "$rc"; FAILED=$((FAILED + 1)); }
+    check_empty "$F/nv.err" nvidia-gpu
+    want "finds the card on the bus"     '0000:03:00.0'         "$F/nv.out"
+    want "reads the model"               'NVIDIA GeForce RTX 3070' "$F/nv.out"
+    want "reads the VBIOS"               '94.04.3F.00.6E'       "$F/nv.out"
+    want "reads the driver version"      '550.90.07'            "$F/nv.out"
+    want "reads the power limit"         '220.00 W enforced'    "$F/nv.out"
+    want "rounds the limit for maths"    'of 220 W limit'       "$F/nv.out"
+    want "reads the slowdown threshold"  '95 C'                 "$F/nv.out"
+    want "reads the target temperature"  '83 C'                 "$F/nv.out"
+    want "samples the hot temperature"   '91.0 C'               "$F/nv.out"
+    want "samples the fan"               '99 %'                 "$F/nv.out"
+    want "samples the clock drop"        '1350 MHz'             "$F/nv.out"
+    want "accounts throttle reasons"     'SHARE OF SAMPLES'     "$F/nv.out"
+    want "flags thermal slowdown"        'HW thermal slowdown'  "$F/nv.out"
+    want "verdict names the throttle"    'thermal slowdown in'  "$F/nv.out"
+    want "verdict judges against VBIOS limits" 'above the 83 C target' "$F/nv.out"
+    want "flags the narrow PCIe link"    'linked at x8 of x16'  "$F/nv.out"
+    want "reports VRAM health"           'no retired pages'     "$F/nv.out"
+    want "reports XID state"             'no XID errors'        "$F/nv.out"
+    want "reports pstate"                'P0'                   "$F/nv.out"
+    wantnot "no unexpanded placeholder"  '@@[A-Z_]+@@'          "$F/nv.out"
+    wantnot "no mangled power figure"    'of 22000 W'           "$F/nv.out"
+    wantnot "no unknown query field"     'FAKE_UNKNOWN_FIELD'   "$F/nv.err"
+
+    # ---- same card, healthy: power capped but cool. guards the green paths
+    echo "== nvidia-gpu.sh against a healthy card (power capped, cool)"
+    echo 'temp=38 util=0 fan=31 ps=P8' > "$NVSTATE"
+    ( sleep $((BASE + 3))
+      echo 'temp=71 util=99 sm=1905 mclk=7000 pwr=218.6 fan=64 ps=P0 mem=3288 pcap=1 genc=4 widc=16' \
+          > "$NVSTATE" ) &
+    NVSIM=$!
+    PATH="$F/bin:$PATH" OS_SYSFS="$F" FAKE_NV_STATE="$NVSTATE" \
+        NO_INSTALL=1 NO_COLOR=1 PLAIN=1 COLS=110 DURATION="$DUR" BASELINE="$BASE" \
+        sh "$S/nvidia-gpu.sh" > "$F/nv2.out" 2> "$F/nv2.err"
+    rc=$?
+    kill $NVSIM 2>/dev/null
+    [ "$rc" = "0" ] && printf '  ok    nvidia-gpu exit code 0\n' || {
+        printf '  FAIL  nvidia-gpu exit code %s\n' "$rc"; FAILED=$((FAILED + 1)); }
+    check_empty "$F/nv2.err" nvidia-gpu
+    want "cooling called healthy"      'peak 71 C - healthy'        "$F/nv2.out"
+    want "fan ramp accepted"           'ramped to 64%'              "$F/nv2.out"
+    want "power cap called normal"     'no thermal throttling - normal' "$F/nv2.out"
+    want "full width PCIe accepted"    'full width (x16)'           "$F/nv2.out"
+    want "power headroom reported"     'of 220 W limit (100%)'      "$F/nv2.out"
+    wantnot "no thermal verdict"       'cooler cannot keep up'      "$F/nv2.out"
+    wantnot "no dead fan verdict"      'never spun up'              "$F/nv2.out"
+fi
+
 # every rendered table row must line up
 echo "== table alignment in real output"
-for f in "$F/cpu.out" "$F/gpu.out"; do
+for f in "$F/cpu.out" "$F/gpu.out" "$F/nv.out" "$F/nv2.out"; do
     bad=$(awk '
         /^[+|]/ {
             if (block == 0) { block = 1; w = length($0) }

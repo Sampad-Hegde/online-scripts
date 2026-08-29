@@ -559,7 +559,9 @@ ensure_cmd() {
 
 # ====================================================================
 #  PCI helpers  (lspci -mm is machine readable; sysfs is the fallback)
+#  OS_SYSFS lets the test suite point every sysfs read at a fake tree.
 # ====================================================================
+OS_SYSFS=${OS_SYSFS:-/sys}
 os_lspci_cache() {
     [ -f "$OS_TMP/lspci" ] && return 0
     if ensure_cmd lspci; then
@@ -583,7 +585,8 @@ pci_name() {
     os_lspci_cache
     _n=$(awk -F'"' -v b="$_b" 'index($0, b) == 1 { print $4 " " $6; exit }' "$OS_TMP/lspci" | pci_clean)
     if [ -z "$_n" ] || [ "$_n" = " " ]; then
-        _v=$(rd "/sys/bus/pci/devices/$1/vendor"); _d=$(rd "/sys/bus/pci/devices/$1/device")
+        _v=$(rd "$OS_SYSFS/bus/pci/devices/$1/vendor")
+        _d=$(rd "$OS_SYSFS/bus/pci/devices/$1/device")
         _n="${_v#0x}:${_d#0x}"
     fi
     printf '%s' "$_n"
@@ -638,9 +641,7 @@ pcie_gen() {
 
 # ====================================================================
 #  temperature / frequency / power sensors
-#  OS_SYSFS exists so the test suite can point these at a fake tree.
 # ====================================================================
-OS_SYSFS=${OS_SYSFS:-/sys}
 CPU_TEMP_PATH=''
 CPU_TEMP_LABEL=''
 
@@ -811,9 +812,18 @@ printf '\n'
 run_part sysinfo
 run_part storage
 
+# an NVIDIA card gets the NVIDIA-specific test instead of the generic one
+GPU_PART=gpu-load
+for _p in "$OS_SYSFS"/bus/pci/devices/*; do
+    [ "$(rd "$_p/vendor")" = "0x10de" ] || continue
+    case "$(rd "$_p/class")" in 0x0300*|0x0302*|0x0380*) ;; *) continue ;; esac
+    have nvidia-smi && GPU_PART=nvidia-gpu
+    break
+done
+
 if [ "$LOAD" = "1" ]; then
     run_part cpu-load "DURATION=$DURATION"
-    run_part gpu-load "DURATION=$DURATION"
+    run_part "$GPU_PART" "DURATION=$DURATION"
 else
     note "load tests skipped - re-run with LOAD=1 (adds ~$((DURATION * 2 / 60)) min):"
     note "  curl -fsSL $(os_url /all.sh) | sudo LOAD=1 sh"

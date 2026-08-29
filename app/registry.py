@@ -27,6 +27,7 @@ ALLOWED_PARAMS: Dict[str, str] = {
     "interval": "INTERVAL",
     "baseline": "BASELINE",
     "gpu": "GPU",
+    "instances": "INSTANCES",
     "speed": "SPEED",
     "spd": "SPD",
     "load": "LOAD",

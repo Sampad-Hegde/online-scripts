@@ -140,6 +140,8 @@ def index_text(root: str, suffix: str) -> str:
         "  OPTIONS  (environment variables, or ?name=value on the URL)",
         "    DURATION=300   load test length in seconds",
         "    THREADS=4      cpu-load worker threads",
+        "    INSTANCES=2    parallel GPU load processes (nvidia-gpu)",
+        "    LOAD_CMD=...   your own GPU burn command, e.g. 'gpu_burn 600' (env only)",
         "    SPEED=0        skip the storage read benchmark",
         "    SPD=1          also decode the memory SPD EEPROM (CAS latency)",
         "    LOAD=1         all.sh: include the load tests",
@@ -199,7 +201,8 @@ def index_html(root: str, suffix: str) -> str:
 </table>
 <h2>Options</h2>
 <ul>
- <li><code>DURATION</code> load test seconds &middot; <code>THREADS</code> cpu workers</li>
+ <li><code>DURATION</code> load test seconds &middot; <code>THREADS</code> cpu workers
+     &middot; <code>INSTANCES</code> parallel GPU load processes</li>
  <li><code>SPEED=0</code> skip storage read benchmark &middot; <code>SPD=1</code> read memory SPD (CAS latency)</li>
  <li><code>LOAD=1</code> make <code>all.sh</code> include the load tests</li>
  <li><code>COLS=160</code> force table width &middot; <code>PLAIN=1</code> ASCII only

@@ -2,7 +2,7 @@
 # shellcheck shell=sh disable=SC2086,SC2012,SC3043
 #@name        gpu-load
 #@title       GPU load + thermal test
-#@description Loads the GPU, samples temperature / utilisation / clock / power, min-max-avg-median
+#@description Any GPU (AMD / Intel / nouveau): load, temperature, utilisation, clock, power, min-max-avg-median
 #@root        recommended
 #@params      duration,interval,baseline,gpu
 # shellcheck shell=sh disable=SC2086,SC2181,SC3043
@@ -559,7 +559,9 @@ ensure_cmd() {
 
 # ====================================================================
 #  PCI helpers  (lspci -mm is machine readable; sysfs is the fallback)
+#  OS_SYSFS lets the test suite point every sysfs read at a fake tree.
 # ====================================================================
+OS_SYSFS=${OS_SYSFS:-/sys}
 os_lspci_cache() {
     [ -f "$OS_TMP/lspci" ] && return 0
     if ensure_cmd lspci; then
@@ -583,7 +585,8 @@ pci_name() {
     os_lspci_cache
     _n=$(awk -F'"' -v b="$_b" 'index($0, b) == 1 { print $4 " " $6; exit }' "$OS_TMP/lspci" | pci_clean)
     if [ -z "$_n" ] || [ "$_n" = " " ]; then
-        _v=$(rd "/sys/bus/pci/devices/$1/vendor"); _d=$(rd "/sys/bus/pci/devices/$1/device")
+        _v=$(rd "$OS_SYSFS/bus/pci/devices/$1/vendor")
+        _d=$(rd "$OS_SYSFS/bus/pci/devices/$1/device")
         _n="${_v#0x}:${_d#0x}"
     fi
     printf '%s' "$_n"
@@ -638,9 +641,7 @@ pcie_gen() {
 
 # ====================================================================
 #  temperature / frequency / power sensors
-#  OS_SYSFS exists so the test suite can point these at a fake tree.
 # ====================================================================
-OS_SYSFS=${OS_SYSFS:-/sys}
 CPU_TEMP_PATH=''
 CPU_TEMP_LABEL=''
 
@@ -903,6 +904,10 @@ HAS_NVSMI=0
 [ "$G_VEN" = "nvidia" ] && have nvidia-smi && HAS_NVSMI=1
 if [ "$G_VEN" = "nvidia" ] && [ "$HAS_NVSMI" = "0" ]; then
     warn "nvidia-smi not found - install the NVIDIA driver for temp/util/power on this card"
+fi
+if [ "$G_VEN" = "nvidia" ] && [ "$HAS_NVSMI" = "1" ]; then
+    note "this card has the NVIDIA driver: nvidia-gpu.sh reports throttle reasons,"
+    note "ECC / retired pages and XID faults as well - $(os_url /nvidia-gpu.sh)"
 fi
 # iGPU: fall back to the CPU package sensor
 if [ -z "$G_TEMP" ] && [ "$HAS_NVSMI" = "0" ]; then

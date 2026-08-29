@@ -1,0 +1,132 @@
+#!/bin/sh
+# A fake nvidia-smi for testing nvidia-gpu.sh without an NVIDIA card.
+# It models a card that warms up, hits its power cap, then thermally throttles.
+#   FAKE_NV_STATE  file holding the tick counter (default /tmp/fake-nv.state)
+#   FAKE_NV_HOT    tick after which thermal slowdown kicks in (default 12)
+#   FAKE_NV_FAN0   set to 1 to simulate a dead fan
+# The caller drives the telemetry by writing shell assignments into
+# $FAKE_NV_STATE, e.g.  echo 'temp=91 fan=99 hwth=1' > /tmp/fake-nv.state
+# Anything not set there keeps the idle defaults below.
+STATE=${FAKE_NV_STATE:-/tmp/fake-nv.state}
+
+temp=38; util=0; sm=210; mclk=405; pwr=21.5; fan=31; ps=P8; mem=412
+pcap=0; hwsd=0; hwth=0; brake=0; swth=0; genc=1; widc=8
+# shellcheck disable=SC1090
+[ -r "$STATE" ] && . "$STATE"
+
+act() { [ "$1" = "1" ] && echo "Active" || echo "Not Active"; }
+
+field() {
+    case "$1" in
+        index) echo 0 ;;
+        name) echo "NVIDIA GeForce RTX 3070" ;;
+        uuid) echo "GPU-1f2e3d4c-5b6a-7988-9a0b-1c2d3e4f5061" ;;
+        serial) echo "[N/A]" ;;
+        vbios_version) echo "94.04.3F.00.6E" ;;
+        driver_version) echo "550.90.07" ;;
+        pci.bus_id) echo "00000000:03:00.0" ;;
+        memory.total) echo 8192 ;;
+        memory.used) echo "$mem" ;;
+        pcie.link.gen.max) echo 4 ;;
+        pcie.link.width.max) echo 16 ;;
+        pcie.link.gen.current) echo "$genc" ;;
+        pcie.link.width.current) echo "$widc" ;;
+        power.limit) echo 220.00 ;;
+        enforced.power.limit) echo 220.00 ;;
+        power.min_limit) echo 100.00 ;;
+        power.max_limit) echo 240.00 ;;
+        power.draw) echo "$pwr" ;;
+        clocks.max.sm) echo 2100 ;;
+        clocks.max.memory) echo 7001 ;;
+        clocks.current.sm) echo "$sm" ;;
+        clocks.current.memory) echo "$mclk" ;;
+        compute_mode) echo Default ;;
+        persistence_mode) echo Disabled ;;
+        display_active) echo Disabled ;;
+        ecc.mode.current) echo "[N/A]" ;;
+        temperature.gpu) echo "$temp" ;;
+        temperature.memory) echo "[N/A]" ;;
+        utilization.gpu) echo "$util" ;;
+        utilization.memory) echo $((util / 2)) ;;
+        fan.speed) echo "$fan" ;;
+        pstate) echo "$ps" ;;
+        ecc.errors.corrected.aggregate.total|ecc.errors.uncorrected.aggregate.total) echo "[N/A]" ;;
+        ecc.errors.corrected.volatile.total|ecc.errors.uncorrected.volatile.total) echo "[N/A]" ;;
+        retired_pages.single_bit_ecc.count|retired_pages.double_bit.count|retired_pages.pending) echo "[N/A]" ;;
+        clocks_throttle_reasons.sw_power_cap) act "$pcap" ;;
+        clocks_throttle_reasons.hw_slowdown) act "$hwsd" ;;
+        clocks_throttle_reasons.hw_thermal_slowdown) act "$hwth" ;;
+        clocks_throttle_reasons.hw_power_brake_slowdown) act "$brake" ;;
+        clocks_throttle_reasons.sw_thermal_slowdown) act "$swth" ;;
+        *) echo "FAKE_UNKNOWN_FIELD:$1" >&2; return 1 ;;
+    esac
+}
+
+QUERY=''; MODE=''; DFLAG=''
+for a in "$@"; do
+    case "$a" in
+        --query-gpu=*)         QUERY=${a#--query-gpu=}; MODE=querygpu ;;
+        --query-remapped-rows=*) MODE=remapped ;;
+        -L|--list-gpus)        MODE=list ;;
+        -q|--query)            MODE=q ;;
+        -d)                    DFLAG=next ;;
+        *) if [ "$DFLAG" = next ]; then DFLAG=$a; fi ;;
+    esac
+done
+
+case "$MODE" in
+    list) echo "GPU 0: NVIDIA GeForce RTX 3070 (UUID: GPU-1f2e3d4c-5b6a-7988-9a0b-1c2d3e4f5061)" ;;
+    querygpu)
+        out=''
+        oldifs=$IFS; IFS=','
+        for f in $QUERY; do
+            v=$(field "$f") || { IFS=$oldifs; exit 1; }
+            if [ -z "$out" ]; then out=$v; else out="$out, $v"; fi
+        done
+        IFS=$oldifs
+        echo "$out" ;;
+    remapped) exit 1 ;;                     # consumer card: unsupported
+    q)
+        cat <<EOF
+==============NVSMI LOG==============
+
+Timestamp                                 : $(date)
+Driver Version                            : 550.90.07
+CUDA Version                              : 12.4
+
+Attached GPUs                             : 1
+GPU 00000000:03:00.0
+    Product Name                          : NVIDIA GeForce RTX 3070
+    Clocks Event Reasons
+        Idle                              : $(act 0)
+        Applications Clocks Setting       : $(act 0)
+        SW Power Cap                      : $(act "$pcap")
+        HW Slowdown                       : $(act "$hwsd")
+            HW Thermal Slowdown           : $(act "$hwth")
+            HW Power Brake Slowdown       : $(act "$brake")
+        Sync Boost                        : $(act 0)
+        SW Thermal Slowdown               : $(act "$swth")
+        Display Clock Setting             : $(act 0)
+    Temperature
+        GPU Current Temp                  : $temp C
+        GPU T.Limit Temp                  : N/A
+        GPU Shutdown Temp                 : 98 C
+        GPU Slowdown Temp                 : 95 C
+        GPU Max Operating Temp            : 93 C
+        GPU Target Temperature            : 83 C
+        Memory Current Temp               : N/A
+    Power Readings
+        Power Draw                        : $pwr W
+        Current Power Limit               : 220.00 W
+        Default Power Limit               : 220.00 W
+        Min Power Limit                   : 100.00 W
+        Max Power Limit                   : 240.00 W
+    Clocks
+        Graphics                          : $sm MHz
+        SM                                : $sm MHz
+        Memory                            : $mclk MHz
+EOF
+        ;;
+    *) echo "fake nvidia-smi: unhandled args: $*" >&2; exit 1 ;;
+esac
+exit 0

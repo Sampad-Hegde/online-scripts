@@ -37,9 +37,18 @@ printf '\n'
 run_part sysinfo
 run_part storage
 
+# an NVIDIA card gets the NVIDIA-specific test instead of the generic one
+GPU_PART=gpu-load
+for _p in "$OS_SYSFS"/bus/pci/devices/*; do
+    [ "$(rd "$_p/vendor")" = "0x10de" ] || continue
+    case "$(rd "$_p/class")" in 0x0300*|0x0302*|0x0380*) ;; *) continue ;; esac
+    have nvidia-smi && GPU_PART=nvidia-gpu
+    break
+done
+
 if [ "$LOAD" = "1" ]; then
     run_part cpu-load "DURATION=$DURATION"
-    run_part gpu-load "DURATION=$DURATION"
+    run_part "$GPU_PART" "DURATION=$DURATION"
 else
     note "load tests skipped - re-run with LOAD=1 (adds ~$((DURATION * 2 / 60)) min):"
     note "  curl -fsSL $(os_url /all.sh) | sudo LOAD=1 sh"
