@@ -71,7 +71,8 @@ PROD_COMPOSE := $(shell if $(PROD_ENGINE) compose version >/dev/null 2>&1; \
 
 .DEFAULT_GOAL := help
 .PHONY: help env dev build run stop restart logs shell ps clean smoke test test-py \
-        test-sh test-lib test-hw lint serve venv prod-build prod-up prod-down \
+        test-sh test-lib test-cuda test-hw lint serve venv prod-build prod-up \
+        prod-down \
         prod-logs prod-restart prod-ps push save render render-all run-scripts \
         dev-compose-up dev-compose-down
 
@@ -152,7 +153,7 @@ smoke: ## curl every endpoint of the running service
 	code=$$(curl -s -o /dev/null -w '%{http_code}' $(BASE_URL)/nope.sh$(TQ)); \
 	test "$$code" = "404" && printf 'ok (404)\n\n'
 
-test: test-py test-sh test-lib test-hw lint ## run everything
+test: test-py test-sh test-lib test-cuda test-hw lint ## run everything
 
 test-py: venv ## python tests (api, script assembly, auth)
 	$(VENV)/bin/pytest
@@ -190,6 +191,12 @@ lint: ## shellcheck the scripts (skipped when shellcheck is absent)
 	    -s sh -e $(SC_EXCLUDE) $(patsubst scripts/%,/mnt/%,$(SCRIPTS)) \
 	    && echo 'shellcheck clean'; \
 	fi
+
+test-cuda: ## compile-check the CUDA sources embedded in nvidia-gpu.sh
+	@$(DEV_ENGINE) run --rm -v ./scripts:/s:ro -v ./tests:/t:ro -w /tmp $(SHELL_IMAGE) sh -c '\
+	  export DEBIAN_FRONTEND=noninteractive; \
+	  apt-get -qq update >/dev/null 2>&1 && apt-get -qq install -y g++ >/dev/null 2>&1; \
+	  sh /t/cuda_syntax_check.sh /s/nvidia-gpu.sh'
 
 test-hw: render-all ## run cpu-load and gpu-load against a fake /sys tree
 	$(DEV_ENGINE) run --rm -e LANG=C.UTF-8 \

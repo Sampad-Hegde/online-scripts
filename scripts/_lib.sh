@@ -551,6 +551,17 @@ ensure_cmd() {
     return 1
 }
 
+# try_cmd: like ensure_cmd, but for optional extras (load generators). A
+# failure here is normal, so it is not reported as a missing tool.
+try_cmd() {
+    _saved="$OS_MISSING"
+    if ensure_cmd "$@"; then
+        return 0
+    fi
+    OS_MISSING="$_saved"
+    return 1
+}
+
 # ====================================================================
 #  PCI helpers  (lspci -mm is machine readable; sysfs is the fallback)
 #  OS_SYSFS lets the test suite point every sysfs read at a fake tree.
@@ -768,7 +779,7 @@ os_init() {
 
 os_footer() {
     [ -n "$OS_INSTALLED" ] && note "packages installed during this run:$OS_INSTALLED"
-    [ -n "$OS_MISSING" ] && warn "tools unavailable (some rows are blank):$OS_MISSING"
+    [ -n "$OS_MISSING" ] && warn "not installed, so some rows are blank:$OS_MISSING"
     printf '%s  more:%s' "$CD" "$CR"
     printf '%s curl -fsSL %s | sudo sh%s\n' "$CD" "$(os_url /sysinfo.sh)" "$CR"
     printf '%s        curl -fsSL %s   # list every script%s\n' \

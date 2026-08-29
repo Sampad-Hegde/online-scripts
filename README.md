@@ -20,7 +20,7 @@ carrying USB sticks full of tools.
 | `storage.sh`   | per drive: model, serial, firmware, capacity, SMART overall health, **lifespan left**, power-on hours, power cycles, data written/read, reallocated + pending sectors, temperature, sequential read speed, and a verdict |
 | `cpu-load.sh`  | loads every thread, samples temperature / clock / package power every second, reports **min, max, average and median**, idle baseline, heat soak, throttle events, an ASCII timeline and a cooling verdict |
 | `gpu-load.sh`  | same idea for any GPU (AMD / Intel / nouveau): temperature, hotspot, utilisation, clock, power, PCIe link under load |
-| `nvidia-gpu.sh` | **NVIDIA only, much deeper**: identity + VBIOS, the card's own temperature thresholds, **throttle-reason accounting** (power cap vs HW thermal vs power brake vs SW thermal, as a share of samples), fan ramp, memory clock, VRAM used, **ECC / retired pages / remapped rows**, **XID errors before and during the run**, PCIe link, and a verdict judged against the VBIOS limits |
+| `nvidia-gpu.sh` | **NVIDIA only, much deeper**: a real **VRAM pattern test** (run cold *and* hot), identity + VBIOS, the card's own temperature thresholds, **throttle-reason accounting** (power cap vs HW thermal vs power brake vs SW thermal, as a share of samples), fan ramp, memory clock, VRAM used, **ECC / retired pages / remapped rows**, **XID errors before and during the run**, PCIe link, and a verdict judged against the VBIOS limits |
 | `all.sh`       | `sysinfo` + `storage` back to back (`LOAD=1` adds the load tests) |
 
 Each script is one self-contained POSIX `sh` file: the server splices a shared
@@ -74,6 +74,8 @@ as URL query parameters (`?duration=600`). The environment wins over the URL.
 | `THREADS` | all threads | cpu-load workers |
 | `INSTANCES` | `2` | parallel GPU load processes (`nvidia-gpu`) |
 | `LOAD_CMD` | unset | your own GPU burn command, e.g. `LOAD_CMD='gpu_burn 600'` (env only, never from the URL) |
+| `VRAM_TEST` | `1` | `0` skips the VRAM pattern test |
+| `VRAM_PCT` | `70` | share of *free* VRAM to pattern-test |
 | `INTERVAL` | `1` | seconds between samples |
 | `BASELINE` | `8` | seconds of idle measurement before loading |
 | `GPU` | `0` | which GPU index to test |
@@ -193,6 +195,7 @@ tests/test_deploy.py   Dockerfile / compose / Makefile guards
 tests/lib_selftest.sh  library self test (tables, stats, parsers, fake sysfs)
 tests/fake_hw_run.sh   load tests run against a simulated overheating machine
 tests/fake-nvidia-smi  fake nvidia-smi so nvidia-gpu.sh can be tested with no card
+tests/cuda_syntax_check.sh  compiles the embedded CUDA sources with a stubbed runtime
 ```
 
 ### Adding a script
@@ -216,6 +219,37 @@ t_end
 
 os_footer
 ```
+
+### Testing VRAM on a used card
+
+This is the thing a mining or server card is most likely to have wrong, and
+`nvidia-smi` can only report it on boards that have **ECC** — which the small
+Quadros (P400, P600, P1000, P2000) and every GeForce board do **not**. On those
+cards `ecc.errors.*` and `retired_pages.*` all read `[N/A]`, so a report that
+says "no errors" is really saying "cannot know". `nvidia-gpu.sh` says exactly
+that, and then tests the memory directly:
+
+- if `nvcc` is available it compiles a small pattern tester, allocates 70% of
+  free VRAM and runs own-address, `0x55555555`/`0xAAAAAAAA` **moving
+  inversions**, all-ones, all-zeros and a pseudo-random pass, counting
+  mismatched 32-bit words and reporting the first failing offsets;
+- it runs that **twice — once cold, then again immediately after the thermal
+  soak**, because marginal VRAM typically passes cold and fails hot:
+
+```
+│ VRAM test      clean cold but 3 mismatch(es) hot - marginal memory, walk away
+│ VRAM counters  this board has no ECC, so it cannot report VRAM faults at all
+```
+
+- without `nvcc` it says so rather than guessing:
+  `sudo apt-get install -y nvidia-cuda-toolkit`. Standalone alternatives are
+  `cuda_memtest` or the single-binary `memtest_vulkan` (which also works on AMD
+  and Intel).
+
+What it still cannot do: test the VRAM the driver has already reserved, prove
+anything about *display* artefacts, or replace a multi-hour soak. It tests
+70% of free memory in a couple of seconds per pass, twice — enough to catch a
+card that is already degrading, not enough to certify one as perfect.
 
 ### Table width
 
@@ -245,6 +279,20 @@ curl -fsSL 'http://server:8080/sysinfo.sh?cols=200' | sudo sh
 - A GPU load generator needs a working GL/Vulkan/OpenCL stack. On a bare
   console `glmark2-drm` or `stress-ng --gpu` work; otherwise the script says so
   and runs monitor-only while you load the GPU yourself.
+- **Hybrid laptops (Optimus)**: OpenGL/Vulkan benchmarks run on the *iGPU*, so a
+  graphics load can leave the NVIDIA chip at 0%. `nvidia-gpu.sh` detects the
+  hybrid setup, prefers compute loads (CUDA/OpenCL) which always land on the
+  NVIDIA card, sets the PRIME offload variables for graphics loads, and — most
+  importantly — **starts the load and checks the card's utilisation before the
+  timed run begins**. If nothing reaches the GPU it says so instead of
+  reporting an idle card as a passed stress test.
+- If the **CUDA toolkit** is installed (`nvcc`), the script compiles its own
+  burn kernel (alternating FMA and memory-bandwidth passes, sized to ~1/6 of
+  VRAM) and pins it to the card by UUID. That is the heaviest load available
+  without extra packages: `sudo apt-get install -y nvidia-cuda-toolkit`.
+- On laptops `nvidia-smi` reports `fan.speed` as `[N/A]` because the embedded
+  controller owns the fan; the script falls back to a chassis fan sensor from
+  hwmon and judges cooling on whether it ramps up.
 - `nvidia-gpu.sh` needs the **proprietary driver** — an Ubuntu live session
   boots `nouveau`, which has no `nvidia-smi`. The script detects that and tells
   you how to fix it; until then `gpu-load.sh` reads what nouveau exposes. If you

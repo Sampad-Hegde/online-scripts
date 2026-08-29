@@ -142,6 +142,7 @@ def index_text(root: str, suffix: str) -> str:
         "    THREADS=4      cpu-load worker threads",
         "    INSTANCES=2    parallel GPU load processes (nvidia-gpu)",
         "    LOAD_CMD=...   your own GPU burn command, e.g. 'gpu_burn 600' (env only)",
+        "    VRAM_TEST=0    skip the nvidia-gpu VRAM pattern test",
         "    SPEED=0        skip the storage read benchmark",
         "    SPD=1          also decode the memory SPD EEPROM (CAS latency)",
         "    LOAD=1         all.sh: include the load tests",

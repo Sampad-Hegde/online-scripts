@@ -28,6 +28,7 @@ ALLOWED_PARAMS: Dict[str, str] = {
     "baseline": "BASELINE",
     "gpu": "GPU",
     "instances": "INSTANCES",
+    "vram": "VRAM_TEST",
     "speed": "SPEED",
     "spd": "SPD",
     "load": "LOAD",
